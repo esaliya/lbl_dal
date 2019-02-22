@@ -68,8 +68,7 @@ DistributedFastaData::DistributedFastaData(
 
 #ifndef NDEBUG
   {
-    // TODO - Debug
-    std::string title = "debug l_seq_count";
+    std::string title = "l_seq_count";
     std::string msg = std::to_string(l_seq_count);
     TraceUtils::print_msg(title, msg, parops);
   }
@@ -167,7 +166,8 @@ void DistributedFastaData::collect_grid_seqs() {
   recv_nbrs_buff_lengths = new uint64_t[recv_nbrs_count];
   for (int i = 0; i < recv_nbrs_count; ++i) {
     MPI_Irecv(recv_nbrs_buff_lengths + i, 1, MPI_UINT64_T,
-              my_nbrs[recv_nbrs_idxs[i]].nbr_rank, 99,
+              my_nbrs[recv_nbrs_idxs[i]].nbr_rank,
+              99+my_nbrs[recv_nbrs_idxs[i]].rc_flag,
               MPI_COMM_WORLD, recv_nbrs_buff_lengths_reqs + i);
   }
 
@@ -266,6 +266,11 @@ void DistributedFastaData::collect_grid_seqs() {
     fd->buffer_size(nbr.nbr_seq_start_idx, nbr.nbr_seq_end_idx,
                     len, start_offset, end_offset);
 
+    // TODO - Debug ================
+    if (parops->world_proc_rank == 3 && nbr.owner_rank == 4 && nbr.rc_flag == 1){
+      std::cout<<"********len:"<<len<<" startoffset:" << start_offset << " seqstartidx:"<<nbr.nbr_seq_start_idx<<" seqendidx"<<nbr.nbr_seq_end_idx<<std::endl;
+    }
+    // TODO - End Debug ================
     send_lengths.push_back(len);
     send_start_offsets.push_back(start_offset);
     to_nbrs_idxs.push_back(i);
@@ -275,7 +280,8 @@ void DistributedFastaData::collect_grid_seqs() {
   auto *to_nbrs_send_reqs = new MPI_Request[to_nbrs_count];
   for (int i = 0; i < to_nbrs_count; ++i) {
     MPI_Isend(&send_lengths[i], 1, MPI_UINT64_T,
-              all_nbrs[to_nbrs_idxs[i]].owner_rank, 99, MPI_COMM_WORLD,
+              all_nbrs[to_nbrs_idxs[i]].owner_rank,
+              99+all_nbrs[to_nbrs_idxs[i]].rc_flag, MPI_COMM_WORLD,
               to_nbrs_send_reqs + i);
   }
 
@@ -322,7 +328,8 @@ void DistributedFastaData::collect_grid_seqs() {
   recv_nbrs_buffs_stats = new MPI_Status[recv_nbrs_count];
   for (int i = 0; i < recv_nbrs_count; ++i) {
     MPI_Irecv(recv_nbrs_buffs[i], static_cast<int>(recv_nbrs_buff_lengths[i]),
-              MPI_CHAR, my_nbrs[recv_nbrs_idxs[i]].nbr_rank, 77, MPI_COMM_WORLD,
+              MPI_CHAR, my_nbrs[recv_nbrs_idxs[i]].nbr_rank,
+              77+my_nbrs[recv_nbrs_idxs[i]].rc_flag, MPI_COMM_WORLD,
               recv_nbrs_buffs_reqs + i);
   }
 
@@ -331,7 +338,8 @@ void DistributedFastaData::collect_grid_seqs() {
   for (int i = 0; i < to_nbrs_count; ++i) {
     MPI_Isend(fd->buffer() + send_start_offsets[i],
               static_cast<int>(send_lengths[i]), MPI_CHAR,
-              all_nbrs[to_nbrs_idxs[i]].owner_rank, 77, MPI_COMM_WORLD,
+              all_nbrs[to_nbrs_idxs[i]].owner_rank,
+              77+all_nbrs[to_nbrs_idxs[i]].rc_flag, MPI_COMM_WORLD,
               to_nbrs_buffs_reqs + i);
   }
 
@@ -443,7 +451,21 @@ DistributedFastaData::push_seqs(int rc_flag, FastaData *fd, uint64_t seqs_count,
   for (uint64_t i = 0; i < seqs_count; ++i) {
     char *buff = fd->get_sequence(seq_start_idx + i, len, start_offset,
                                   end_offset_inclusive);
-    seqan::Peptide *seq = new seqan::Peptide(buff + start_offset, len);
+    // TODO - Debug =================
+//    seqan::Peptide *seq = new seqan::Peptide(buff + start_offset, len);
+//    if (start_offset >= end_offset_inclusive) {
+//      std::string title = "start >= end";
+//      std::string msg =
+//        "r" + std::to_string(parops->world_proc_rank) + " ssidx:" +
+//        std::to_string(seq_start_idx) + " i:" + std::to_string(i) + " lc:" +
+//        std::to_string(fd->local_count()) + " fdsoff:" +
+//        std::to_string(fd->start_offset()) + " fdeoff:" +
+//        std::to_string(fd->end_offset()) + " seqcount: " + std::to_string(seqs_count) + "\n";
+//      std::cout << msg;
+//    }
+    seqan::Peptide *seq = new seqan::Peptide("DDMM");
+    // TODO - End Debug =================
+
     if (rc_flag == 1) {
       /*! grid row sequence */
       row_seqs.push_back(seq);
@@ -479,6 +501,7 @@ void DistributedFastaData::wait() {
     uint64_t nbr_seqs_count = (nbr.nbr_seq_end_idx - nbr.nbr_seq_start_idx) + 1;
     if (nbr.nbr_rank == parops->world_proc_rank) {
       /*! Local data, so create SeqAn sequences from <tt>fd</tt> */
+      assert(fd->local_count() >= nbr_seqs_count);
       push_seqs(nbr.rc_flag, fd, nbr_seqs_count, nbr.nbr_seq_start_idx);
     } else {
       /*! Foreign data in a received buffer, so create a FastaData instance
@@ -497,6 +520,17 @@ void DistributedFastaData::wait() {
 #endif
       FastaData *recv_fd = new FastaData(recv_nbrs_buffs[recv_nbr_idx], k, 0,
                                          recv_nbr_l_end, tp, tu);
+
+      if(recv_fd->local_count() != nbr_seqs_count){
+        std::string msg = "\nr:" + std::to_string(parops->world_proc_rank) +
+          " nbr.nbr_rank:" + std::to_string(nbr.nbr_rank) +
+          " nbr.rc_flag:" + std::to_string(nbr.rc_flag) +
+          " nbr_seqs_count: " + std::to_string(nbr_seqs_count) +
+          " recv_fd->local_count:" + std::to_string(recv_fd->local_count()) +"\n";
+        std::cout<<msg;
+      }
+
+      assert(recv_fd->local_count() == nbr_seqs_count);
 
       push_seqs(nbr.rc_flag, recv_fd, nbr_seqs_count, 0);
       ++recv_nbr_idx;

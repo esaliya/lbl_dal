@@ -215,12 +215,12 @@ int main(int argc, char **argv) {
     dfd->wait();
   }
 
-  DistributedAligner dal(klength, xdrop, gap_open, gap_ext, dfd, C, parops);
+  /*DistributedAligner dal(klength, xdrop, gap_open, gap_ext, dfd, C, parops);
   uint64_t total_alignments = dal.align_seqs();
 
   if (is_print_rank) {
     std::cout << "Final alignment count: " << total_alignments << std::endl;
-  }
+  }*/
 
   MPI_Barrier(MPI_COMM_WORLD);
   tp->times["end_main"] = std::chrono::system_clock::now();
